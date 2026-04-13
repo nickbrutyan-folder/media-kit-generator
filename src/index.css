@@ -75,6 +75,11 @@
     @apply border-border;
   }
 
+  input:focus, textarea:focus, select:focus {
+    outline: none !important;
+    box-shadow: none !important;
+  }
+
   body {
     @apply bg-background text-foreground;
     font-family: 'Neue Haas Unica', 'Helvetica Neue', Helvetica, Arial, sans-serif;
@@ -96,5 +101,13 @@
 
 .font-mono {
   font-family: 'Neue Haas Unica', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+}
+
+/* Remove all borders inside media kit cards — overrides Tailwind's * { border } */
+.mediakit-card *,
+.mediakit-card *::before,
+.mediakit-card *::after {
+  border: none !important;
+  border-width: 0 !important;
 }
 

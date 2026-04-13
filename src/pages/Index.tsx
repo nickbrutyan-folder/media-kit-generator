@@ -1,95 +1,162 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { parseUsername, type PersonaResult } from "@/lib/personaGenerator";
-import { analyzePersona } from "@/lib/api";
-import { SocialCardAnimated, renderCardToCanvas, type CardTheme } from "@/components/SocialCard";
-import AnalysisLoader from "@/components/AnalysisLoader";
+import type { MediaKitData, SocialPlatform } from "@/lib/mediaKit";
+import { NICHE_OPTIONS, PLATFORM_LABELS, PLATFORM_ICONS } from "@/lib/mediaKit";
+import { MediaKitCardAnimated, renderMediaKitFromRef, type CardTheme } from "@/components/MediaKitCard";
 import BluOrbBackground from "@/components/BluOrbBackground";
 
-type Stage = "landing" | "loading" | "result";
+type Stage = "form" | "loading" | "result";
 
-const EXAMPLE_HANDLES = ["@sama", "@paulg", "@naval", "@lexfridman"];
 const BRAND = "#1800ad";
 
+const EMPTY_SOCIAL = (platform: SocialPlatform["platform"]): SocialPlatform => ({
+  platform,
+  handle: "",
+  followers: "",
+});
+
+const DEFAULT_DATA: MediaKitData = {
+  displayName: "",
+  bio: "",
+  niche: [],
+  email: "",
+  profileImageUrl: "",
+  socials: [
+    EMPTY_SOCIAL("twitter"),
+  ],
+  engagementRate: "",
+  avgLikes: "",
+  avgComments: "",
+  impressions: "",
+  engagements: "",
+  proposedDeal: "",
+  dealPrice: "",
+};
+
+/** Extract X handle from a URL or raw input like @handle, x.com/handle, https://twitter.com/handle */
+function parseXHandle(input: string): string {
+  const trimmed = input.trim();
+  // Strip URL patterns
+  const urlMatch = trimmed.match(/(?:https?:\/\/)?(?:www\.)?(?:x\.com|twitter\.com)\/(@?\w+)/i);
+  if (urlMatch) return urlMatch[1].replace(/^@/, "");
+  // Strip leading @
+  return trimmed.replace(/^@/, "");
+}
+
+const inputStyle = {
+  background: "#cde2f5",
+  border: "none",
+  color: BRAND,
+  fontFamily: "'Neue Haas Unica', sans-serif",
+  fontWeight: 300 as const,
+};
+
+function FormInput({ label, value, onChange, placeholder, type = "text", required = false }: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  type?: string;
+  required?: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label className="text-xs font-bold tracking-widest uppercase" style={{ color: BRAND, opacity: 0.5 }}>
+        {label} {required && <span style={{ color: "#e03" }}>*</span>}
+      </label>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="rounded-full px-5 py-3 text-sm focus:outline-none focus:ring-0"
+        style={inputStyle}
+        required={required}
+      />
+    </div>
+  );
+}
+
 export default function Index() {
-  const [stage, setStage] = useState<Stage>("landing");
-  const [input, setInput] = useState("");
-  const [username, setUsername] = useState("");
-  const [persona, setPersona] = useState<PersonaResult | null>(null);
+  const [stage, setStage] = useState<Stage>("form");
+  const [data, setData] = useState<MediaKitData>(DEFAULT_DATA);
   const [error, setError] = useState("");
   const [copyState, setCopyState] = useState<"idle" | "copying" | "done">("idle");
   const [cardTheme, setCardTheme] = useState<CardTheme>("dark");
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [bgColor, setBgColor] = useState<string>("");
   const cardRef = useRef<HTMLDivElement>(null);
-  const apiPromiseRef = useRef<Promise<PersonaResult> | null>(null);
+  const pfpTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
-  function handleSubmit(e?: React.FormEvent) {
-    e?.preventDefault();
-    const parsed = parseUsername(input);
-    if (!parsed || parsed.length < 2) {
-      setError("Enter a valid X handle or profile URL");
+  const COLOR_SWATCHES = [
+    { hex: "", label: "Default" },
+    { hex: "#1800ad", label: "Brand Blue" },
+    { hex: "#0f0f0f", label: "Black" },
+    { hex: "#1a1a2e", label: "Navy" },
+    { hex: "#0d1b2a", label: "Midnight" },
+    { hex: "#493c37", label: "Mocha" },
+    { hex: "#ffe5b6", label: "Peach" },
+    { hex: "#ff9cf2", label: "Pink" },
+    { hex: "#F5EEC0", label: "Cream" },
+    { hex: "#eef0ff", label: "Frost" },
+  ];
+  function updateField<K extends keyof MediaKitData>(key: K, value: MediaKitData[K]) {
+    setData((d) => ({ ...d, [key]: value }));
+  }
+
+  function updateSocial(index: number, field: keyof SocialPlatform, value: string) {
+    setData((d) => {
+      const socials = [...d.socials];
+      socials[index] = { ...socials[index], [field]: value };
+      return { ...d, socials };
+    });
+  }
+
+  function handleGenerate(e: React.FormEvent) {
+    e.preventDefault();
+    const hasSocial = data.socials.some((s) => s.handle.trim());
+    if (!hasSocial) {
+      setError("Please enter your X handle and click 'fetch profile'");
       return;
     }
     setError("");
-    setUsername(parsed);
-    // Fire API call immediately — runs in parallel with loading animation
-    apiPromiseRef.current = analyzePersona(parsed);
     setStage("loading");
-  }
-
-  async function handleAnalysisComplete() {
-    try {
-      const result = await apiPromiseRef.current!;
-      setPersona(result);
-      setStage("result");
-    } catch (e: any) {
-      console.error("Analysis failed:", e);
-      setError(e.message || "Something went wrong. Please try again.");
-      setStage("landing");
-    } finally {
-      apiPromiseRef.current = null;
-    }
+    setTimeout(() => setStage("result"), 2500);
   }
 
   function handleReset() {
-    setStage("landing");
-    setInput("");
-    setPersona(null);
-    setTimeout(() => inputRef.current?.focus(), 100);
+    setStage("form");
   }
 
   const handleCopyImage = useCallback(async () => {
-    if (!persona || copyState === "copying") return;
+    if (copyState === "copying") return;
     setCopyState("copying");
     try {
-      const canvas = await renderCardToCanvas(persona, cardTheme);
-      canvas.toBlob(async (blob) => {
-        if (!blob) { setCopyState("idle"); return; }
-        try {
-          await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-          setCopyState("done");
-          setTimeout(() => setCopyState("idle"), 2000);
-        } catch {
-          setCopyState("idle");
-        }
-      }, "image/png");
-    } catch (e) {
-      console.error("Copy image failed:", e);
+      const dataUrl = await renderMediaKitFromRef(cardRef);
+      const res = await fetch(dataUrl);
+      const blob = await res.blob();
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      setCopyState("done");
+      setTimeout(() => setCopyState("idle"), 2000);
+    } catch {
       setCopyState("idle");
     }
-  }, [copyState, persona, cardTheme]);
+  }, [copyState]);
 
-  function handleShare() {
-    if (!persona) return;
-    const text = encodeURIComponent(
-      `Just discovered my Marketeer Persona: ${persona.archetype.emoji} ${persona.archetype.name}\n\n"${persona.archetype.description}"\n\nFind yours 👇`
-    );
-    window.open(`https://twitter.com/intent/tweet?text=${text}`, "_blank");
-  }
+  const handleDownload = useCallback(async () => {
+    try {
+      const dataUrl = await renderMediaKitFromRef(cardRef);
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = `${data.displayName.replace(/\s+/g, "-").toLowerCase()}-media-kit.png`;
+      a.click();
+    } catch (e) {
+      console.error("Download failed:", e);
+    }
+  }, [data.displayName]);
 
   return (
     <div
-      className="min-h-screen flex flex-col overflow-hidden"
+      className="min-h-screen flex flex-col overflow-y-auto"
       style={{ fontFamily: "'Neue Haas Unica', 'Helvetica Neue', Helvetica, Arial, sans-serif", color: BRAND }}
     >
       <BluOrbBackground />
@@ -106,208 +173,291 @@ export default function Index() {
         </svg>
       </header>
 
-      <main className="relative z-10 flex-1 flex flex-col items-center justify-center px-5 sm:px-8 py-8 sm:py-12">
+      <main className="relative z-10 flex-1 flex flex-col items-center justify-start px-5 sm:px-8 py-4 sm:py-8">
         <AnimatePresence mode="wait">
 
-          {/* LANDING */}
-          {stage === "landing" && (
+          {/* FORM */}
+          {stage === "form" && (
             <motion.div
-              key="landing"
+              key="form"
               initial={{ opacity: 0, y: 24 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -16 }}
               transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-              className="flex flex-col items-center text-center w-full max-w-md"
+              className="flex flex-col items-center text-center w-full max-w-lg pb-12"
             >
               <motion.h1
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.15, duration: 0.6 }}
-                className="text-4xl sm:text-5xl md:text-6xl leading-tight tracking-tight mb-4 sm:mb-6"
+                transition={{ delay: 0.1, duration: 0.6 }}
+                className="text-3xl sm:text-4xl md:text-5xl leading-tight tracking-tight mb-2 sm:mb-3"
                 style={{ color: BRAND, fontWeight: 700, letterSpacing: "-0.03em" }}
               >
-                discover your Marketeer persona
+                win more, lock in more deals, create your mediakit
               </motion.h1>
 
               <motion.p
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.22 }}
-                className="text-base sm:text-lg md:text-2xl leading-relaxed mb-8 sm:mb-10 max-w-sm sm:max-w-none"
-                style={{ color: BRAND, opacity: 0.75, fontWeight: 300 }}
+                transition={{ delay: 0.18 }}
+                className="text-sm sm:text-base leading-relaxed mb-6 sm:mb-8"
+                style={{ color: BRAND, opacity: 0.6, fontWeight: 300 }}
               >
-                are you an ai slop marketeer or a giga brain marketeer?
+                fill in your details and generate a professional crypto influencer media kit
               </motion.p>
 
-              {/* Input form */}
-              <motion.form
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.3 }}
-                onSubmit={handleSubmit}
-                className="w-full flex flex-col sm:flex-row gap-3 mb-4"
-              >
-                <div className="relative flex-1">
-                  <div className="absolute left-4 top-1/2 -translate-y-1/2" style={{ color: BRAND, opacity: 0.3 }}>
-                    <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current">
-                      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.73-8.835L1.254 2.25H8.08l4.259 5.63L18.244 2.25zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
-                    </svg>
-                  </div>
+              <form onSubmit={handleGenerate} className="w-full text-left flex flex-col gap-4">
+                {/* X Account — first so they can fetch profile */}
+                <label className="text-xs font-bold tracking-widest uppercase" style={{ color: BRAND, opacity: 0.5 }}>YOUR X PROFILE</label>
+                <div className="flex items-center gap-3 rounded-full px-5 py-3" style={{ background: "#cde2f5" }}>
+                  <svg viewBox="0 0 24 24" className="w-5 h-5 flex-shrink-0" fill={BRAND} style={{ opacity: 0.5 }}>
+                    <path d={PLATFORM_ICONS.twitter} />
+                  </svg>
                   <input
-                    ref={inputRef}
                     type="text"
-                    value={input}
-                    onChange={(e) => { setInput(e.target.value); setError(""); }}
-                    placeholder="@yourhandle or x.com/yourhandle"
-                    className="w-full rounded-full pl-11 pr-4 py-3.5 sm:py-4 text-sm focus:outline-none"
-                    style={{
-                      background: "#cde2f5",
-                      border: "none",
-                      color: BRAND,
-                      fontFamily: "'Neue Haas Unica', sans-serif",
-                      fontWeight: 300,
+                    value={data.socials[0]?.handle || ""}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      const handle = parseXHandle(raw);
+                      updateSocial(0, "handle", handle || raw);
+                      // Debounced PFP fetch from unavatar (free)
+                      if (pfpTimerRef.current) clearTimeout(pfpTimerRef.current);
+                      if (handle && handle.length >= 2 && /^\w+$/.test(handle)) {
+                        pfpTimerRef.current = setTimeout(() => {
+                          updateField("profileImageUrl", `https://unavatar.io/x/${handle}`);
+                          updateField("displayName", handle);
+                        }, 600);
+                      }
                     }}
-                    autoFocus
+                    placeholder="x.com/your_handle or @your_handle"
+                    className="flex-1 bg-transparent text-sm focus:outline-none"
+                    style={{ color: BRAND, fontWeight: 300, fontFamily: "'Neue Haas Unica', sans-serif" }}
                   />
                 </div>
-                <button
-                  type="submit"
-                  className="px-8 py-3.5 sm:py-4 rounded-full text-sm font-bold tracking-wide active:scale-[0.98] whitespace-nowrap"
-                  style={{
-                    background: BRAND,
-                    color: "#ffffff",
-                    fontFamily: "'Neue Haas Unica', sans-serif",
-                    fontWeight: 700,
-                    transition: "background 0.15s ease, color 0.15s ease",
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.background = "#cde2f5"; e.currentTarget.style.color = "#1800ad"; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = BRAND; e.currentTarget.style.color = "#ffffff"; }}
-                >
-                  analyze
-                </button>
-              </motion.form>
 
-              {error && (
-                <motion.p
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="text-xs mb-4"
-                  style={{ color: "#e03" }}
-                >
-                  {error}
-                </motion.p>
-              )}
+                {/* PFP preview */}
+                {data.profileImageUrl && (
+                  <div className="flex items-center gap-3">
+                    <img
+                      src={data.profileImageUrl}
+                      alt="Profile"
+                      className="w-10 h-10 rounded-full object-cover"
+                      style={{ border: `2px solid ${BRAND}25` }}
+                      onError={(e) => { e.currentTarget.style.display = "none"; }}
+                    />
+                    <span className="text-xs" style={{ color: BRAND, opacity: 0.5 }}>
+                      @{data.socials[0]?.handle}
+                    </span>
+                  </div>
+                )}
 
-              {/* Example handles */}
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 0.4 }}
-                className="flex flex-wrap gap-3 justify-center"
-              >
-                <span className="text-xs font-mono" style={{ color: BRAND, opacity: 0.3 }}>try:</span>
-                {EXAMPLE_HANDLES.map((h) => (
+                {/* Follower Count */}
+                <FormInput
+                  label="Follower Count"
+                  value={data.socials[0]?.followers || ""}
+                  onChange={(v) => updateSocial(0, "followers", v)}
+                  placeholder="269,655"
+                />
+
+                {/* About You */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-bold tracking-widest uppercase" style={{ color: BRAND, opacity: 0.5 }}>BIO</label>
+                  <textarea
+                    value={data.bio}
+                    onChange={(e) => updateField("bio", e.target.value)}
+                    placeholder="Tell crypto projects about yourself in 2-3 sentences..."
+                    rows={3}
+                    className="rounded-3xl px-5 py-3 text-sm focus:outline-none focus:ring-0 resize-none"
+                    style={inputStyle}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <label className="text-xs font-bold tracking-widest uppercase" style={{ color: BRAND, opacity: 0.5 }}>NICHES (select multiple)</label>
+                  <div className="flex flex-wrap gap-2">
+                    {NICHE_OPTIONS.map((n) => {
+                      const selected = data.niche.includes(n);
+                      return (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => {
+                            if (selected) {
+                              updateField("niche", data.niche.filter((x) => x !== n));
+                            } else {
+                              updateField("niche", [...data.niche, n]);
+                            }
+                          }}
+                          className="px-3.5 py-2 rounded-full text-xs font-bold tracking-wide transition-all"
+                          style={{
+                            background: selected ? BRAND : "#cde2f5",
+                            color: selected ? "#fff" : BRAND,
+                            fontFamily: "'Neue Haas Unica', sans-serif",
+                            opacity: selected ? 1 : 0.7,
+                          }}
+                        >
+                          {n}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Divider */}
+                <div className="my-1" style={{ height: "1px", background: `${BRAND}15` }} />
+
+                {/* Stats & Contact */}
+                <FormInput label="Engagement Rate (%)" value={data.engagementRate} onChange={(v) => updateField("engagementRate", v)} placeholder="1.41" />
+                <div className="grid grid-cols-2 gap-4">
+                  <FormInput label="Impressions (90 days)" value={data.impressions} onChange={(v) => updateField("impressions", v)} placeholder="141400000" />
+                  <FormInput label="Engagements (90 days)" value={data.engagements} onChange={(v) => updateField("engagements", v)} placeholder="2260000" />
+                </div>
+                <FormInput label="Contact Email" value={data.email} onChange={(v) => updateField("email", v)} placeholder="contact@cryptosensei.io" type="email" />
+
+                {/* Divider */}
+                <div className="my-1" style={{ height: "1px", background: `${BRAND}15` }} />
+
+                {/* Proposed Deal */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-bold tracking-widest uppercase" style={{ color: BRAND, opacity: 0.5 }}>PROPOSED DEAL <span style={{ opacity: 0.5, fontWeight: 300, textTransform: "lowercase", letterSpacing: "0.02em" }}>(optional)</span></label>
+                  <textarea
+                    value={data.proposedDeal}
+                    onChange={(e) => updateField("proposedDeal", e.target.value)}
+                    placeholder="4 X (Twitter) Posts delivered over 4 weeks"
+                    rows={2}
+                    className="rounded-3xl px-5 py-3 text-sm focus:outline-none focus:ring-0 resize-none"
+                    style={inputStyle}
+                  />
+                </div>
+                <FormInput label="Deal Price ($) (optional)" value={data.dealPrice} onChange={(v) => updateField("dealPrice", v)} placeholder="8,000" />
+
+                {error && (
+                  <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-xs mt-1 text-center" style={{ color: "#e03" }}>
+                    {error}
+                  </motion.p>
+                )}
+
+                {/* Generate button */}
+                <div className="mt-4">
                   <button
-                    key={h}
-                    onClick={() => setInput(h)}
-                    className="text-xs font-mono transition-opacity hover:opacity-80"
-                    style={{ color: BRAND, opacity: 0.45 }}
+                    type="submit"
+                    className="w-full px-6 py-3.5 rounded-full text-sm font-bold tracking-wide active:scale-[0.98]"
+                    style={{ background: BRAND, color: "#ffffff", fontFamily: "'Neue Haas Unica', sans-serif", fontWeight: 700, transition: "background 0.15s" }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = "#cde2f5"; e.currentTarget.style.color = BRAND; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = BRAND; e.currentTarget.style.color = "#ffffff"; }}
                   >
-                    {h}
+                    generate media kit
                   </button>
-                ))}
-              </motion.div>
+                </div>
+              </form>
             </motion.div>
           )}
 
           {/* LOADING */}
           {stage === "loading" && (
-            <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-              <AnalysisLoader username={username} onComplete={handleAnalysisComplete} />
+            <motion.div
+              key="loading"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 1.1 }}
+              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+              className="flex flex-col items-center justify-center text-center py-24"
+            >
+              <motion.div
+                animate={{ rotate: [0, -10, 10, -10, 0], scale: [1, 1.1, 1, 1.1, 1] }}
+                transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
+                className="text-8xl sm:text-9xl mb-6"
+              >
+                👨‍🍳
+              </motion.div>
+              <motion.p
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.3 }}
+                className="text-lg sm:text-xl font-bold tracking-tight"
+                style={{ color: BRAND }}
+              >
+                cooking your media kit...
+              </motion.p>
+              <motion.div
+                initial={{ width: 0 }}
+                animate={{ width: "200px" }}
+                transition={{ duration: 2.2, ease: "easeInOut" }}
+                className="h-1 rounded-full mt-4"
+                style={{ background: BRAND }}
+              />
             </motion.div>
           )}
 
           {/* RESULT */}
-          {stage === "result" && persona && (
+          {stage === "result" && (
             <motion.div
               key="result"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="flex flex-col items-center w-full max-w-2xl px-1"
+              className="flex flex-col items-center w-full max-w-4xl px-1"
             >
               <motion.div
                 initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.2 }}
-                className="text-center mb-6 sm:mb-8"
+                className="text-center mb-4 sm:mb-6"
               >
-                <p
-                  className="text-xs font-mono tracking-widest mb-2"
-                  style={{ color: BRAND, opacity: 0.4 }}
-                >
-                  your persona is ready
+                <p className="text-xs font-mono tracking-widest mb-2" style={{ color: BRAND, opacity: 0.4 }}>
+                  your media kit is ready
                 </p>
-                <h2
-                  className="text-xl sm:text-2xl"
-                  style={{ color: BRAND, fontWeight: 700 }}
-                >
-                  {persona.archetype.emoji} {persona.archetype.name}
+                <h2 className="text-xl sm:text-2xl" style={{ color: BRAND, fontWeight: 700 }}>
+                  {data.displayName}
                 </h2>
               </motion.div>
 
-              {/* Theme toggle */}
+              {/* Color swatches */}
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                transition={{ delay: 0.5 }}
-                className="flex items-center mb-4 rounded-full p-1"
-                style={{ background: "rgba(24,0,173,0.08)" }}
+                transition={{ delay: 0.4 }}
+                className="flex items-center gap-2 mb-5"
               >
-                {(["dark", "light"] as CardTheme[]).map((t) => (
+                {COLOR_SWATCHES.filter(s => s.hex).map((swatch) => (
                   <button
-                    key={t}
-                    onClick={() => setCardTheme(t)}
-                    className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-bold tracking-widest uppercase transition-all"
+                    key={swatch.hex}
+                    onClick={() => setBgColor(bgColor === swatch.hex ? "" : swatch.hex)}
+                    title={swatch.label}
+                    className="rounded-full transition-all"
                     style={{
-                      background: cardTheme === t ? BRAND : "transparent",
-                      color: cardTheme === t ? "#ffffff" : BRAND,
-                      fontFamily: "'Neue Haas Unica', sans-serif",
-                      opacity: cardTheme === t ? 1 : 0.5,
-                      transition: "all 0.2s ease",
+                      width: bgColor === swatch.hex ? 28 : 22,
+                      height: bgColor === swatch.hex ? 28 : 22,
+                      background: swatch.hex,
+                      border: bgColor === swatch.hex ? "3px solid rgba(24,0,173,0.5)" : "2px solid rgba(24,0,173,0.15)",
+                      boxShadow: bgColor === swatch.hex ? "0 0 0 2px #fff" : "none",
+                      cursor: "pointer",
                     }}
-                  >
-                    {t}
-                  </button>
+                  />
                 ))}
               </motion.div>
 
-              <SocialCardAnimated persona={persona} cardRef={cardRef} theme={cardTheme} />
+              <MediaKitCardAnimated data={data} cardRef={cardRef} theme={cardTheme} bgColor={bgColor || undefined} />
 
-              {/* Action buttons — stack on mobile, row on desktop */}
+              {/* Action buttons */}
               <motion.div
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.7 }}
+                transition={{ delay: 0.6 }}
                 className="flex flex-col sm:flex-row gap-3 mt-6 sm:mt-8 w-full"
               >
                 <button
-                  onClick={handleShare}
+                  onClick={handleDownload}
                   className="flex-1 flex items-center justify-center gap-2 px-5 py-3 sm:py-3.5 rounded-full text-sm font-bold tracking-wide active:scale-[0.98]"
-                  style={{
-                    background: BRAND,
-                    color: "#ffffff",
-                    fontFamily: "'Neue Haas Unica', sans-serif",
-                    fontWeight: 700,
-                    transition: "background 0.15s ease",
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.background = "#12008a"; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = BRAND; }}
+                  style={{ background: BRAND, color: "#ffffff", fontFamily: "'Neue Haas Unica', sans-serif", fontWeight: 700, transition: "background 0.15s" }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = "#12008a"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = BRAND; }}
                 >
-                  <svg viewBox="0 0 24 24" className="w-4 h-4 fill-white">
-                    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.73-8.835L1.254 2.25H8.08l4.259 5.63L18.244 2.25zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                  <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
                   </svg>
-                  share on X
+                  download PNG
                 </button>
                 <button
                   onClick={handleCopyImage}
@@ -318,33 +468,23 @@ export default function Index() {
                     color: copyState === "done" ? "#ffffff" : BRAND,
                     fontFamily: "'Neue Haas Unica', sans-serif",
                     fontWeight: 700,
-                    transition: "background 0.15s ease, color 0.15s ease",
+                    transition: "background 0.15s, color 0.15s",
                     opacity: copyState === "copying" ? 0.7 : 1,
                     cursor: copyState === "copying" ? "wait" : "pointer",
                   }}
-                  onMouseEnter={e => { if (copyState === "idle") e.currentTarget.style.background = "#b8d4ee"; }}
-                  onMouseLeave={e => { if (copyState === "idle") e.currentTarget.style.background = "#cde2f5"; }}
                 >
                   {copyState === "done" ? (
                     <>
                       <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2.5">
-                        <polyline points="20 6 9 17 4 12"/>
+                        <polyline points="20 6 9 17 4 12" />
                       </svg>
                       copied!
-                    </>
-                  ) : copyState === "copying" ? (
-                    <>
-                      <svg viewBox="0 0 24 24" className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" strokeWidth="2">
-                        <circle cx="12" cy="12" r="10" strokeOpacity="0.25"/>
-                        <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round"/>
-                      </svg>
-                      copying...
                     </>
                   ) : (
                     <>
                       <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2">
-                        <rect x="9" y="9" width="13" height="13" rx="2"/>
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                        <rect x="9" y="9" width="13" height="13" rx="2" />
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
                       </svg>
                       copy image
                     </>
@@ -353,17 +493,11 @@ export default function Index() {
                 <button
                   onClick={handleReset}
                   className="flex-1 flex items-center justify-center gap-2 px-5 py-3 sm:py-3.5 rounded-full text-sm font-bold tracking-wide active:scale-[0.98]"
-                  style={{
-                    background: "#cde2f5",
-                    color: BRAND,
-                    fontFamily: "'Neue Haas Unica', sans-serif",
-                    fontWeight: 700,
-                    transition: "background 0.15s ease",
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.background = "#b8d4ee"; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = "#cde2f5"; }}
+                  style={{ background: "#cde2f5", color: BRAND, fontFamily: "'Neue Haas Unica', sans-serif", fontWeight: 700, transition: "background 0.15s" }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = "#b8d4ee"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "#cde2f5"; }}
                 >
-                  try another
+                  edit details
                 </button>
               </motion.div>
             </motion.div>
