@@ -4,6 +4,8 @@ import type { MediaKitData, SocialPlatform } from "@/lib/mediaKit";
 import { NICHE_OPTIONS, PLATFORM_LABELS, PLATFORM_ICONS } from "@/lib/mediaKit";
 import { MediaKitCardAnimated, renderMediaKitFromRef, type CardTheme } from "@/components/MediaKitCard";
 import BluOrbBackground from "@/components/BluOrbBackground";
+import CsvUpload from "@/components/CsvUpload";
+import type { XAnalyticsStats } from "@/lib/csvAnalytics";
 
 type Stage = "form" | "loading" | "result";
 
@@ -129,6 +131,18 @@ export default function Index() {
 
   function handleReset() {
     setStage("form");
+  }
+
+  /** Auto-fill the numeric stats fields from a parsed X analytics CSV. */
+  function handleAnalyticsParsed(stats: XAnalyticsStats) {
+    setData((d) => ({
+      ...d,
+      impressions:    String(stats.totals.impressions),
+      engagements:    String(stats.totals.engagements),
+      engagementRate: stats.engagementRate.toFixed(2),
+      avgLikes:       stats.averages.likesPerDay.toFixed(1),
+      avgComments:    stats.averages.repliesPerDay.toFixed(1),
+    }));
   }
 
   const handleCopyImage = useCallback(async () => {
@@ -308,6 +322,9 @@ export default function Index() {
 
                 {/* Divider */}
                 <div className="my-1" style={{ height: "1px", background: `${BRAND}15` }} />
+
+                {/* CSV upload — auto-fills the stats below */}
+                <CsvUpload onParsed={handleAnalyticsParsed} />
 
                 {/* Stats & Contact */}
                 <FormInput label="Engagement Rate (%)" value={data.engagementRate} onChange={(v) => updateField("engagementRate", v)} placeholder="1.41" />
