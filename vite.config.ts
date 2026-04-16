@@ -9,6 +9,14 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
+    // Proxy /api/* to the counter API during `npm run dev`.
+    // In production Nginx handles this at the edge.
+    proxy: {
+      "/api": {
+        target: "http://127.0.0.1:3101",
+        changeOrigin: false,
+      },
+    },
   },
   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
   resolve: {

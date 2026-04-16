@@ -120,7 +120,11 @@ export default function Index() {
     }
     setError("");
     setStage("loading");
-    setTimeout(() => setStage("result"), 2500);
+    setTimeout(() => {
+      setStage("result");
+      // Fire-and-forget counter bump. Never blocks the UI; counter is analytics only.
+      fetch("/api/count", { method: "POST" }).catch(() => { /* ignore */ });
+    }, 2500);
   }
 
   function handleReset() {
