@@ -187,36 +187,34 @@ export default function CsvUpload({ onParsed }: CsvUploadProps) {
               onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
               onDragLeave={() => setIsDragging(false)}
               onDrop={onDrop}
-              className="w-full flex flex-col items-center justify-center gap-2 rounded-2xl py-6 sm:py-8 px-4 transition-all focus:outline-none"
+              className="w-full flex flex-row items-center justify-center gap-2.5 rounded-full py-3 px-5 transition-all focus:outline-none"
               style={{
                 background: isDragging ? "#b8d4ee" : TINT,
-                border: `2px dashed ${BRAND}${isDragging ? "66" : "33"}`,
+                border: `1.5px dashed ${BRAND}${isDragging ? "66" : "33"}`,
                 color: BRAND,
                 cursor: "pointer",
               }}
             >
               {state.kind === "parsing" ? (
                 <>
-                  <svg viewBox="0 0 24 24" className="w-7 h-7 animate-spin" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg viewBox="0 0 24 24" className="w-4 h-4 animate-spin flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M21 12a9 9 0 1 1-6.219-8.56" />
                   </svg>
                   <span className="text-sm font-bold">Reading your file…</span>
                 </>
               ) : (
                 <>
-                  <svg viewBox="0 0 24 24" className="w-7 h-7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.7 }}>
+                  <svg viewBox="0 0 24 24" className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.7 }}>
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                     <polyline points="17 8 12 3 7 8" />
                     <line x1="12" y1="3" x2="12" y2="15" />
                   </svg>
-                  <div className="flex flex-col items-center">
-                    <span className="text-sm font-bold">
-                      {isDragging ? "Drop to upload" : "Drop your X analytics CSV here"}
-                    </span>
-                    <span className="text-xs" style={{ opacity: 0.55, fontWeight: 300 }}>
-                      or click to browse — .csv only
-                    </span>
-                  </div>
+                  <span className="text-sm font-bold whitespace-nowrap">
+                    {isDragging ? "Drop to upload" : "Drop CSV"}
+                  </span>
+                  <span className="text-xs hidden sm:inline" style={{ opacity: 0.55, fontWeight: 300 }}>
+                    or click to browse
+                  </span>
                 </>
               )}
             </button>
