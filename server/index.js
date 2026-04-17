@@ -48,6 +48,10 @@ const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 
 // --- schema ----------------------------------------------------------------
+// Order matters:
+//   1. Create tables (CREATE TABLE IF NOT EXISTS preserves any pre-existing rows).
+//   2. Run idempotent column migrations for old kits tables from prior versions.
+//   3. Only now create indexes that reference those columns.
 db.exec(`
   CREATE TABLE IF NOT EXISTS kits (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,7 +60,6 @@ db.exec(`
     display_name TEXT,
     followers INTEGER
   );
-  CREATE INDEX IF NOT EXISTS idx_kits_username ON kits(username);
 
   CREATE TABLE IF NOT EXISTS x_profile_cache (
     username TEXT PRIMARY KEY,
@@ -65,8 +68,6 @@ db.exec(`
   );
 `);
 
-// Idempotent column migration in case the db was created by an older version
-// of this service (pre-metadata columns)
 const existingKitCols = new Set(
   db.prepare("PRAGMA table_info(kits)").all().map((r) => r.name),
 );
@@ -81,6 +82,9 @@ for (const [col, type] of needed) {
     console.log(`[mediakit-api] migrated: added kits.${col}`);
   }
 }
+
+// Safe to create the index now — username column is guaranteed to exist
+db.exec("CREATE INDEX IF NOT EXISTS idx_kits_username ON kits(username)");
 
 // --- prepared statements ---------------------------------------------------
 const qInsertKit = db.prepare(
