@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { MediaKitData, SocialPlatform } from "@/lib/mediaKit";
 import { NICHE_OPTIONS, PLATFORM_LABELS, PLATFORM_ICONS } from "@/lib/mediaKit";
@@ -6,6 +6,25 @@ import { MediaKitCardAnimated, renderMediaKitFromRef, type CardTheme } from "@/c
 import BluOrbBackground from "@/components/BluOrbBackground";
 import CsvUpload from "@/components/CsvUpload";
 import type { XAnalyticsStats } from "@/lib/csvAnalytics";
+import { fetchXProfile, type XProfileError } from "@/lib/xProfile";
+
+/** Keys that Sorsa fills. When one of these is auto-filled we show a ✓ and
+ *  use a muted background. On user edit we clear the flag. */
+type AutoFillKey =
+  | "displayName"
+  | "bio"
+  | "profileImageUrl"
+  | "followers"
+  | "engagementRate"
+  | "impressions"
+  | "engagements"
+  | "avgLikes"
+  | "avgComments";
+
+/** Background tint for fields the user still needs to fill (bright blue). */
+const TINT_MANUAL = "#cde2f5";
+/** Background tint for fields that were auto-filled from Sorsa or CSV (muted). */
+const TINT_FILLED = "#e4e8f1";
 
 type Stage = "form" | "loading" | "result";
 
@@ -45,36 +64,58 @@ function parseXHandle(input: string): string {
   return trimmed.replace(/^@/, "");
 }
 
-const inputStyle = {
-  background: "#cde2f5",
-  border: "none",
-  color: BRAND,
-  fontFamily: "'Neue Haas Unica', sans-serif",
-  fontWeight: 300 as const,
-};
+function fieldStyle(autoFilled: boolean): React.CSSProperties {
+  return {
+    background: autoFilled ? TINT_FILLED : TINT_MANUAL,
+    border: "none",
+    color: BRAND,
+    fontFamily: "'Neue Haas Unica', sans-serif",
+    fontWeight: 300,
+  };
+}
 
-function FormInput({ label, value, onChange, placeholder, type = "text", required = false }: {
+/** Small green check badge shown inside auto-filled inputs. */
+function AutoFilledBadge() {
+  return (
+    <span
+      title="auto-filled from X"
+      aria-label="auto-filled from X"
+      className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 flex items-center justify-center rounded-full"
+      style={{ width: 18, height: 18, background: "#1a9e5c", color: "#fff" }}
+    >
+      <svg viewBox="0 0 24 24" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="20 6 9 17 4 12" />
+      </svg>
+    </span>
+  );
+}
+
+function FormInput({ label, value, onChange, placeholder, type = "text", required = false, autoFilled = false }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   type?: string;
   required?: boolean;
+  autoFilled?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-1.5">
       <label className="text-xs font-bold tracking-widest uppercase" style={{ color: BRAND, opacity: 0.5 }}>
         {label} {required && <span style={{ color: "#e03" }}>*</span>}
       </label>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="rounded-full px-5 py-3 text-sm focus:outline-none focus:ring-0"
-        style={inputStyle}
-        required={required}
-      />
+      <div className="relative">
+        <input
+          type={type}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="w-full rounded-full px-5 py-3 text-sm focus:outline-none focus:ring-0"
+          style={{ ...fieldStyle(autoFilled), paddingRight: autoFilled ? 36 : undefined }}
+          required={required}
+        />
+        {autoFilled && <AutoFilledBadge />}
+      </div>
     </div>
   );
 }
@@ -87,7 +128,19 @@ export default function Index() {
   const [cardTheme, setCardTheme] = useState<CardTheme>("dark");
   const [bgColor, setBgColor] = useState<string>("");
   const cardRef = useRef<HTMLDivElement>(null);
-  const pfpTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  // Which fields are currently populated from a Sorsa fetch (or CSV upload).
+  // Cleared for a field as soon as the user edits it.
+  const [autoFilled, setAutoFilled] = useState<Record<AutoFillKey, boolean>>({
+    displayName: false, bio: false, profileImageUrl: false, followers: false,
+    engagementRate: false, impressions: false, engagements: false,
+    avgLikes: false, avgComments: false,
+  });
+
+  // X profile fetch state (the "Fetch" button)
+  const [fetchState, setFetchState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const [fetchMessage, setFetchMessage] = useState<string>("");
+  const [lastFetchCached, setLastFetchCached] = useState<boolean>(false);
 
   const COLOR_SWATCHES = [
     { hex: "", label: "Default" },
@@ -101,8 +154,14 @@ export default function Index() {
     { hex: "#F5EEC0", label: "Cream" },
     { hex: "#eef0ff", label: "Frost" },
   ];
+  function clearAutoFilled(key: AutoFillKey) {
+    setAutoFilled((af) => (af[key] ? { ...af, [key]: false } : af));
+  }
+
+  /** setter used by the user (edit clears auto-fill marker) */
   function updateField<K extends keyof MediaKitData>(key: K, value: MediaKitData[K]) {
     setData((d) => ({ ...d, [key]: value }));
+    if (key in autoFilled) clearAutoFilled(key as AutoFillKey);
   }
 
   function updateSocial(index: number, field: keyof SocialPlatform, value: string) {
@@ -111,21 +170,91 @@ export default function Index() {
       socials[index] = { ...socials[index], [field]: value };
       return { ...d, socials };
     });
+    if (index === 0 && field === "followers") clearAutoFilled("followers");
   }
+
+  /**
+   * Fetch the X profile for the handle in socials[0] and auto-fill everything
+   * Sorsa gives us. Safe to call repeatedly — the VPS caches for 24h.
+   */
+  const handleFetchFromX = useCallback(async () => {
+    const handle = data.socials[0]?.handle?.trim();
+    if (!handle) {
+      setFetchState("error");
+      setFetchMessage("Enter your X handle first.");
+      return;
+    }
+    setFetchState("loading");
+    setFetchMessage("");
+    try {
+      const { profile, cached } = await fetchXProfile(handle);
+      setData((d) => {
+        const socials = [...d.socials];
+        socials[0] = {
+          ...socials[0],
+          handle: profile.username ?? socials[0].handle,
+          followers: profile.followers_count ? String(profile.followers_count) : socials[0].followers,
+        };
+        return {
+          ...d,
+          displayName:      profile.display_name || d.displayName,
+          bio:              profile.description || d.bio,
+          profileImageUrl:  profile.profile_image_url || d.profileImageUrl,
+          impressions:      profile.stats.impressions     ? String(profile.stats.impressions)     : d.impressions,
+          engagements:      profile.stats.engagements     ? String(profile.stats.engagements)     : d.engagements,
+          engagementRate:   profile.stats.engagement_rate ? profile.stats.engagement_rate.toFixed(2) : d.engagementRate,
+          avgLikes:         profile.stats.avg_likes       ? profile.stats.avg_likes.toFixed(1)   : d.avgLikes,
+          avgComments:      profile.stats.avg_replies     ? profile.stats.avg_replies.toFixed(1) : d.avgComments,
+          socials,
+        };
+      });
+      setAutoFilled({
+        displayName:     Boolean(profile.display_name),
+        bio:             Boolean(profile.description),
+        profileImageUrl: Boolean(profile.profile_image_url),
+        followers:       profile.followers_count > 0,
+        impressions:     profile.stats.impressions > 0,
+        engagements:     profile.stats.engagements > 0,
+        engagementRate:  profile.stats.engagement_rate > 0,
+        avgLikes:        profile.stats.avg_likes > 0,
+        avgComments:     profile.stats.avg_replies > 0,
+      });
+      setLastFetchCached(cached);
+      setFetchState("loaded");
+      setFetchMessage(
+        profile.protected
+          ? "Profile loaded — this account's tweets are private, so engagement stats are blank."
+          : "",
+      );
+    } catch (err) {
+      const e = err as XProfileError;
+      setFetchState("error");
+      setFetchMessage(e?.message || "Lookup failed — you can fill these in manually.");
+    }
+  }, [data.socials]);
 
   function handleGenerate(e: React.FormEvent) {
     e.preventDefault();
     const hasSocial = data.socials.some((s) => s.handle.trim());
     if (!hasSocial) {
-      setError("Please enter your X handle and click 'fetch profile'");
+      setError("Please enter your X handle first.");
       return;
     }
     setError("");
     setStage("loading");
     setTimeout(() => {
       setStage("result");
-      // Fire-and-forget counter bump. Never blocks the UI; counter is analytics only.
-      fetch("/api/count", { method: "POST" }).catch(() => { /* ignore */ });
+      // Fire-and-forget counter bump with metadata for private reporting.
+      const followersNum = parseInt(String(data.socials[0]?.followers || "").replace(/[^0-9]/g, ""), 10);
+      fetch("/api/count", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: data.socials[0]?.handle || null,
+          display_name: data.displayName || null,
+          followers: Number.isFinite(followersNum) ? followersNum : null,
+        }),
+      }).catch(() => { /* ignore */ });
     }, 2500);
   }
 
@@ -142,6 +271,14 @@ export default function Index() {
       engagementRate: stats.engagementRate.toFixed(2),
       avgLikes:       stats.averages.likesPerDay.toFixed(1),
       avgComments:    stats.averages.repliesPerDay.toFixed(1),
+    }));
+    setAutoFilled((af) => ({
+      ...af,
+      impressions:    stats.totals.impressions > 0,
+      engagements:    stats.totals.engagements > 0,
+      engagementRate: stats.engagementRate > 0,
+      avgLikes:       stats.averages.likesPerDay > 0,
+      avgComments:    stats.averages.repliesPerDay > 0,
     }));
   }
 
@@ -225,33 +362,80 @@ export default function Index() {
               </motion.p>
 
               <form onSubmit={handleGenerate} className="w-full text-left flex flex-col gap-4">
-                {/* X Account — first so they can fetch profile */}
-                <label className="text-xs font-bold tracking-widest uppercase" style={{ color: BRAND, opacity: 0.5 }}>YOUR X PROFILE</label>
-                <div className="flex items-center gap-3 rounded-full px-5 py-3" style={{ background: "#cde2f5" }}>
-                  <svg viewBox="0 0 24 24" className="w-5 h-5 flex-shrink-0" fill={BRAND} style={{ opacity: 0.5 }}>
-                    <path d={PLATFORM_ICONS.twitter} />
-                  </svg>
-                  <input
-                    type="text"
-                    value={data.socials[0]?.handle || ""}
-                    onChange={(e) => {
-                      const raw = e.target.value;
-                      const handle = parseXHandle(raw);
-                      updateSocial(0, "handle", handle || raw);
-                      // Debounced PFP fetch from unavatar (free)
-                      if (pfpTimerRef.current) clearTimeout(pfpTimerRef.current);
-                      if (handle && handle.length >= 2 && /^\w+$/.test(handle)) {
-                        pfpTimerRef.current = setTimeout(() => {
-                          updateField("profileImageUrl", `https://unavatar.io/x/${handle}`);
-                          updateField("displayName", handle);
-                        }, 600);
-                      }
+                {/* X Account — input + fetch button */}
+                <label className="text-xs font-bold tracking-widest uppercase" style={{ color: BRAND, opacity: 0.5 }}>
+                  YOUR X PROFILE
+                </label>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <div className="flex items-center gap-3 rounded-full px-5 py-3 flex-1" style={{ background: TINT_MANUAL }}>
+                    <svg viewBox="0 0 24 24" className="w-5 h-5 flex-shrink-0" fill={BRAND} style={{ opacity: 0.5 }}>
+                      <path d={PLATFORM_ICONS.twitter} />
+                    </svg>
+                    <input
+                      type="text"
+                      value={data.socials[0]?.handle || ""}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        const handle = parseXHandle(raw);
+                        updateSocial(0, "handle", handle || raw);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          if (fetchState !== "loading") handleFetchFromX();
+                        }
+                      }}
+                      placeholder="x.com/your_handle or @your_handle"
+                      className="flex-1 bg-transparent text-sm focus:outline-none"
+                      style={{ color: BRAND, fontWeight: 300, fontFamily: "'Neue Haas Unica', sans-serif" }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleFetchFromX}
+                    disabled={fetchState === "loading" || !data.socials[0]?.handle?.trim()}
+                    className="rounded-full px-6 py-3 text-sm font-bold tracking-wide whitespace-nowrap transition-all active:scale-[0.98]"
+                    style={{
+                      background: BRAND,
+                      color: "#fff",
+                      opacity: fetchState === "loading" || !data.socials[0]?.handle?.trim() ? 0.5 : 1,
+                      cursor: fetchState === "loading" || !data.socials[0]?.handle?.trim() ? "not-allowed" : "pointer",
+                      fontFamily: "'Neue Haas Unica', sans-serif",
+                      fontWeight: 700,
                     }}
-                    placeholder="x.com/your_handle or @your_handle"
-                    className="flex-1 bg-transparent text-sm focus:outline-none"
-                    style={{ color: BRAND, fontWeight: 300, fontFamily: "'Neue Haas Unica', sans-serif" }}
-                  />
+                  >
+                    {fetchState === "loading" ? (
+                      <span className="inline-flex items-center gap-2">
+                        <svg viewBox="0 0 24 24" className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                        </svg>
+                        fetching…
+                      </span>
+                    ) : fetchState === "loaded" ? (
+                      <span className="inline-flex items-center gap-2">
+                        <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                        fetched
+                      </span>
+                    ) : (
+                      "fetch from X"
+                    )}
+                  </button>
                 </div>
+
+                {/* Fetch status line (success cached hint or error) */}
+                {fetchState === "loaded" && (
+                  <p className="text-xs -mt-1" style={{ color: BRAND, opacity: 0.55, fontWeight: 300 }}>
+                    ✓ loaded from X{lastFetchCached ? " (from cache — no credits used)" : ""}
+                    {fetchMessage ? ` — ${fetchMessage}` : ""}
+                  </p>
+                )}
+                {fetchState === "error" && (
+                  <p className="text-xs -mt-1" style={{ color: "#e03", fontWeight: 500 }}>
+                    {fetchMessage || "Lookup failed — you can still fill the form manually."}
+                  </p>
+                )}
 
                 {/* PFP preview */}
                 {data.profileImageUrl && (
@@ -265,6 +449,7 @@ export default function Index() {
                     />
                     <span className="text-xs" style={{ color: BRAND, opacity: 0.5 }}>
                       @{data.socials[0]?.handle}
+                      {data.displayName && data.displayName !== data.socials[0]?.handle ? ` · ${data.displayName}` : ""}
                     </span>
                   </div>
                 )}
@@ -275,19 +460,32 @@ export default function Index() {
                   value={data.socials[0]?.followers || ""}
                   onChange={(v) => updateSocial(0, "followers", v)}
                   placeholder="269,655"
+                  autoFilled={autoFilled.followers}
                 />
 
                 {/* About You */}
                 <div className="flex flex-col gap-1.5">
                   <label className="text-xs font-bold tracking-widest uppercase" style={{ color: BRAND, opacity: 0.5 }}>BIO</label>
-                  <textarea
-                    value={data.bio}
-                    onChange={(e) => updateField("bio", e.target.value)}
-                    placeholder="Tell crypto projects about yourself in 2-3 sentences..."
-                    rows={3}
-                    className="rounded-3xl px-5 py-3 text-sm focus:outline-none focus:ring-0 resize-none"
-                    style={inputStyle}
-                  />
+                  <div className="relative">
+                    <textarea
+                      value={data.bio}
+                      onChange={(e) => updateField("bio", e.target.value)}
+                      placeholder="Tell crypto projects about yourself in 2-3 sentences..."
+                      rows={3}
+                      className="w-full rounded-3xl px-5 py-3 text-sm focus:outline-none focus:ring-0 resize-none"
+                      style={{ ...fieldStyle(autoFilled.bio), paddingRight: autoFilled.bio ? 36 : undefined }}
+                    />
+                    {autoFilled.bio && (
+                      <span
+                        className="pointer-events-none absolute right-4 top-4 flex items-center justify-center rounded-full"
+                        style={{ width: 18, height: 18, background: "#1a9e5c", color: "#fff" }}
+                      >
+                        <svg viewBox="0 0 24 24" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex flex-col gap-2">
                   <label className="text-xs font-bold tracking-widest uppercase" style={{ color: BRAND, opacity: 0.5 }}>NICHES (select multiple)</label>
@@ -323,14 +521,17 @@ export default function Index() {
                 {/* Divider */}
                 <div className="my-1" style={{ height: "1px", background: `${BRAND}15` }} />
 
-                {/* CSV upload — auto-fills the stats below */}
-                <CsvUpload onParsed={handleAnalyticsParsed} />
+                {/* CSV upload — only shown until Sorsa (or a previous CSV) has filled the stats.
+                    Once any of the stat fields is auto-filled, we hide the CSV UI to keep the form clean. */}
+                {!(autoFilled.impressions || autoFilled.engagements || autoFilled.engagementRate) && (
+                  <CsvUpload onParsed={handleAnalyticsParsed} />
+                )}
 
                 {/* Stats & Contact */}
-                <FormInput label="Engagement Rate (%)" value={data.engagementRate} onChange={(v) => updateField("engagementRate", v)} placeholder="1.41" />
+                <FormInput label="Engagement Rate (%)" value={data.engagementRate} onChange={(v) => updateField("engagementRate", v)} placeholder="1.41" autoFilled={autoFilled.engagementRate} />
                 <div className="grid grid-cols-2 gap-4">
-                  <FormInput label="Impressions (90 days)" value={data.impressions} onChange={(v) => updateField("impressions", v)} placeholder="141400000" />
-                  <FormInput label="Engagements (90 days)" value={data.engagements} onChange={(v) => updateField("engagements", v)} placeholder="2260000" />
+                  <FormInput label="Impressions" value={data.impressions} onChange={(v) => updateField("impressions", v)} placeholder="141400000" autoFilled={autoFilled.impressions} />
+                  <FormInput label="Engagements" value={data.engagements} onChange={(v) => updateField("engagements", v)} placeholder="2260000" autoFilled={autoFilled.engagements} />
                 </div>
                 <FormInput label="Contact Email" value={data.email} onChange={(v) => updateField("email", v)} placeholder="contact@cryptosensei.io" type="email" />
 
@@ -346,7 +547,7 @@ export default function Index() {
                     placeholder="4 X (Twitter) Posts delivered over 4 weeks"
                     rows={2}
                     className="rounded-3xl px-5 py-3 text-sm focus:outline-none focus:ring-0 resize-none"
-                    style={inputStyle}
+                    style={fieldStyle(false)}
                   />
                 </div>
                 <FormInput label="Deal Price ($) (optional)" value={data.dealPrice} onChange={(v) => updateField("dealPrice", v)} placeholder="8,000" />
