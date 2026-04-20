@@ -4,16 +4,9 @@
 //   getXProfile(db, username, { apiKey })  →  { profile, cached } | throws
 //   getSorsaUsage(apiKey)                  →  Sorsa /key-usage-info passthrough
 //
-// What we fetch per fresh lookup (2 Sorsa credits, cached 24h per username):
-//   • /info          — display name, bio, avatar, followers, verified, etc.
-//   • /user-tweets   — last ~20 tweets, used to compute:
-//       - impressions (sum of view_count)
-//       - engagements (sum of likes + replies + retweets + quotes + bookmarks)
-//       - engagement_rate = engagements / impressions × 100
-//       - avg likes per tweet, avg replies per tweet
-//
-// Note: the 20-tweet window is small. Kit owners can still overwrite the
-// numbers manually or replace them via CSV upload for longer windows.
+// Scope: lightweight — we ONLY call /info (1 Sorsa credit per fresh fetch,
+// cached 24h per username). Returns display name, bio, avatar, follower count
+// and a handful of identity flags. Engagement stats stay manual / CSV-filled.
 
 const SORSA_BASE = "https://api.sorsa.io/v3";
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -56,34 +49,8 @@ function toInt(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** Aggregate stats over the user's recent tweets (typically last 20). */
-function computeStatsFromTweets(tweets) {
-  const valid = Array.isArray(tweets) ? tweets : [];
-  const n = valid.length;
-  let impressions = 0, likes = 0, replies = 0, retweets = 0, quotes = 0, bookmarks = 0;
-  for (const t of valid) {
-    impressions += toInt(t?.view_count);
-    likes       += toInt(t?.likes_count);
-    replies     += toInt(t?.reply_count);
-    retweets    += toInt(t?.retweet_count);
-    quotes      += toInt(t?.quote_count);
-    bookmarks   += toInt(t?.bookmark_count);
-  }
-  const engagements = likes + replies + retweets + quotes + bookmarks;
-  const engagementRate = impressions > 0 ? (engagements / impressions) * 100 : 0;
-  return {
-    tweets_analyzed: n,
-    impressions,
-    engagements,
-    engagement_rate: engagementRate,
-    avg_likes:   n > 0 ? likes   / n : 0,
-    avg_replies: n > 0 ? replies / n : 0,
-    totals: { likes, replies, retweets, quotes, bookmarks },
-  };
-}
-
-/** Slim the Sorsa responses to exactly what the frontend needs. */
-function shapeResult(info, stats) {
+/** Slim the Sorsa /info response to exactly what the frontend needs. */
+function shapeResult(info) {
   return {
     username:          info?.username || null,
     display_name:      info?.display_name || null,
@@ -97,7 +64,6 @@ function shapeResult(info, stats) {
     protected:         Boolean(info?.protected),
     location:          info?.location || null,
     created_at:        info?.created_at || null,
-    stats,
   };
 }
 
@@ -142,16 +108,14 @@ export async function getXProfile(db, usernameInput, { apiKey, force = false } =
     }
   }
 
-  // 2) fresh fetch: /info + /user-tweets in parallel (2 Sorsa credits)
-  const [infoRes, tweetsRes] = await Promise.allSettled([
-    sorsaFetch(`/info?username=${encodeURIComponent(username)}`, apiKey),
-    sorsaFetch(`/user-tweets`, apiKey, { method: "POST", body: { username } }),
-  ]);
-
-  if (infoRes.status === "rejected") {
-    throw { status: 502, message: "sorsa-unreachable", detail: infoRes.reason?.message };
+  // 2) fresh fetch — /info only (1 Sorsa credit)
+  let info;
+  try {
+    info = await sorsaFetch(`/info?username=${encodeURIComponent(username)}`, apiKey);
+  } catch (e) {
+    throw { status: 502, message: "sorsa-unreachable", detail: e?.message };
   }
-  const info = infoRes.value;
+
   if (info.status === 404) throw { status: 404, message: "user-not-found" };
   if (info.status === 401 || info.status === 403) {
     throw { status: 502, message: "sorsa-auth-failed" };
@@ -160,15 +124,7 @@ export async function getXProfile(db, usernameInput, { apiKey, force = false } =
     throw { status: 502, message: "sorsa-info-error", detail: info.body?.message };
   }
 
-  // Tweets are best-effort — a protected/suspended/empty account still gets
-  // their /info result back, just with zeroed stats.
-  const tweets =
-    tweetsRes.status === "fulfilled" && tweetsRes.value.status < 400
-      ? tweetsRes.value.body?.tweets
-      : [];
-  const stats = computeStatsFromTweets(tweets);
-
-  const profile = shapeResult(info.body, stats);
+  const profile = shapeResult(info.body);
 
   // 3) cache
   try {

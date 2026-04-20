@@ -5,22 +5,6 @@
  * and returns a slim shape optimized for filling the media kit form.
  */
 
-export interface XProfileStats {
-  tweets_analyzed: number;
-  impressions: number;
-  engagements: number;
-  engagement_rate: number;
-  avg_likes: number;
-  avg_replies: number;
-  totals: {
-    likes: number;
-    replies: number;
-    retweets: number;
-    quotes: number;
-    bookmarks: number;
-  };
-}
-
 export interface XProfile {
   username: string | null;
   display_name: string | null;
@@ -34,7 +18,6 @@ export interface XProfile {
   protected: boolean;
   location: string | null;
   created_at: string | null;
-  stats: XProfileStats;
 }
 
 export interface XProfileResponse {

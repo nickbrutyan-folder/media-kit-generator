@@ -8,8 +8,12 @@ import CsvUpload from "@/components/CsvUpload";
 import type { XAnalyticsStats } from "@/lib/csvAnalytics";
 import { fetchXProfile, type XProfileError } from "@/lib/xProfile";
 
-/** Keys that Sorsa fills. When one of these is auto-filled we show a ✓ and
- *  use a muted background. On user edit we clear the flag. */
+/** Keys that can be auto-filled (from Sorsa or CSV). When one is filled we
+ *  show a ✓ and use a muted background. User edit clears the flag.
+ *
+ *  The first four come from Sorsa's /info (identity data).
+ *  The latter five come from the CSV uploader (performance stats).
+ *  Sorsa itself never touches the performance stats anymore. */
 type AutoFillKey =
   | "displayName"
   | "bio"
@@ -174,8 +178,10 @@ export default function Index() {
   }
 
   /**
-   * Fetch the X profile for the handle in socials[0] and auto-fill everything
-   * Sorsa gives us. Safe to call repeatedly — the VPS caches for 24h.
+   * Fetch basic X profile identity (display name, bio, avatar, followers)
+   * from Sorsa's /info. 1 credit per fresh lookup; cached 24h per username.
+   * Engagement stats are intentionally NOT touched — they come from the
+   * CSV upload or manual entry.
    */
   const handleFetchFromX = useCallback(async () => {
     const handle = data.socials[0]?.handle?.trim();
@@ -197,35 +203,22 @@ export default function Index() {
         };
         return {
           ...d,
-          displayName:      profile.display_name || d.displayName,
-          bio:              profile.description || d.bio,
-          profileImageUrl:  profile.profile_image_url || d.profileImageUrl,
-          impressions:      profile.stats.impressions     ? String(profile.stats.impressions)     : d.impressions,
-          engagements:      profile.stats.engagements     ? String(profile.stats.engagements)     : d.engagements,
-          engagementRate:   profile.stats.engagement_rate ? profile.stats.engagement_rate.toFixed(2) : d.engagementRate,
-          avgLikes:         profile.stats.avg_likes       ? profile.stats.avg_likes.toFixed(1)   : d.avgLikes,
-          avgComments:      profile.stats.avg_replies     ? profile.stats.avg_replies.toFixed(1) : d.avgComments,
+          displayName:     profile.display_name    || d.displayName,
+          bio:             profile.description     || d.bio,
+          profileImageUrl: profile.profile_image_url || d.profileImageUrl,
           socials,
         };
       });
-      setAutoFilled({
+      setAutoFilled((af) => ({
+        ...af,
         displayName:     Boolean(profile.display_name),
         bio:             Boolean(profile.description),
         profileImageUrl: Boolean(profile.profile_image_url),
         followers:       profile.followers_count > 0,
-        impressions:     profile.stats.impressions > 0,
-        engagements:     profile.stats.engagements > 0,
-        engagementRate:  profile.stats.engagement_rate > 0,
-        avgLikes:        profile.stats.avg_likes > 0,
-        avgComments:     profile.stats.avg_replies > 0,
-      });
+      }));
       setLastFetchCached(cached);
       setFetchState("loaded");
-      setFetchMessage(
-        profile.protected
-          ? "Profile loaded — this account's tweets are private, so engagement stats are blank."
-          : "",
-      );
+      setFetchMessage("");
     } catch (err) {
       const e = err as XProfileError;
       setFetchState("error");
@@ -521,11 +514,9 @@ export default function Index() {
                 {/* Divider */}
                 <div className="my-1" style={{ height: "1px", background: `${BRAND}15` }} />
 
-                {/* CSV upload — only shown until Sorsa (or a previous CSV) has filled the stats.
-                    Once any of the stat fields is auto-filled, we hide the CSV UI to keep the form clean. */}
-                {!(autoFilled.impressions || autoFilled.engagements || autoFilled.engagementRate) && (
-                  <CsvUpload onParsed={handleAnalyticsParsed} />
-                )}
+                {/* CSV upload — the only way to auto-fill the numeric stats below.
+                    Sorsa intentionally doesn't touch these (20-tweet sample too small). */}
+                <CsvUpload onParsed={handleAnalyticsParsed} />
 
                 {/* Stats & Contact */}
                 <FormInput label="Engagement Rate (%)" value={data.engagementRate} onChange={(v) => updateField("engagementRate", v)} placeholder="1.41" autoFilled={autoFilled.engagementRate} />
